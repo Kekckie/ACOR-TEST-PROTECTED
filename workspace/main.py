@@ -1,2 +1,2 @@
 def double(value):
-    return value
+    return value * 2
