@@ -1,0 +1,1 @@
+# Synthetic native merge acceptance
