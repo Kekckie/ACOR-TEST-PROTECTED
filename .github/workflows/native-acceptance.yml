@@ -1,0 +1,72 @@
+name: Controlled native acceptance
+on:
+  workflow_dispatch:
+    inputs:
+      pull_number:
+        required: true
+        type: string
+      head_sha:
+        required: true
+        type: string
+      action:
+        required: true
+        type: choice
+        options: [check_success, check_failure]
+permissions: {}
+jobs:
+  controlled-actor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      checks: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      PULL_NUMBER: ${{ inputs.pull_number }}
+      EXPECTED_HEAD: ${{ inputs.head_sha }}
+      ACCEPTANCE_ACTION: ${{ inputs.action }}
+    steps:
+      - name: Validate synthetic fixture and act as a distinct native account
+        shell: python
+        run: |
+          import base64, json, os, re, urllib.request
+          repo = os.environ['REPOSITORY']
+          assert repo == 'Kekckie/ACOR-TEST-PROTECTED'
+          number = os.environ['PULL_NUMBER']
+          head = os.environ['EXPECTED_HEAD']
+          action = os.environ['ACCEPTANCE_ACTION']
+          assert number.isdigit() and re.fullmatch('[0-9a-f]{40}', head)
+          def api(method, suffix, body=None):
+              raw = json.dumps(body).encode() if body is not None else None
+              request = urllib.request.Request('https://api.github.com/repos/' + repo + suffix,
+                  method=method, data=raw, headers={
+                      'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2026-03-10'})
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  return json.load(response)
+          pull = api('GET', '/pulls/' + number)
+          assert pull['head']['sha'] == head and pull['head']['repo']['full_name'] == repo
+          assert pull['user']['login'] == 'Kekckie'
+          assert '<!-- acor-native-acceptance -->' in pull['body']
+          files = api('GET', '/pulls/' + number + '/files?per_page=100')
+          assert 1 <= len(files) <= 2
+          for file in files:
+              assert file['filename'] in {'workspace/main.py', 'README.md'}
+              assert file['status'] == 'modified' and file['changes'] <= 20
+              data = api('GET', '/contents/' + file['filename'] + '?ref=' + head)
+              content = base64.b64decode(data['content']).decode()
+              if file['filename'] == 'workspace/main.py':
+                  assert content in {'def double(value):\n    return value * 2\n',
+                                     'def double(value):\n    return 2 * value\n'}
+              else:
+                  assert content == '# Synthetic native merge acceptance\n\nBase advanced by an independently reviewed PR.\n'
+          assert action in {'check_success', 'check_failure'}
+          result = api('POST', '/check-runs', {
+              'name': 'ACOR native fixture', 'head_sha': head, 'status': 'completed',
+              'conclusion': 'success' if action == 'check_success' else 'failure',
+              'output': {'title': 'Controlled synthetic acceptance',
+                         'summary': 'Exact SHA and bounded synthetic file content verified. ' + action}})
+          print(json.dumps({'check_id': result['id'], 'head_sha': result['head_sha'],
+                            'app_id': result['app']['id'], 'conclusion': result['conclusion']}))
